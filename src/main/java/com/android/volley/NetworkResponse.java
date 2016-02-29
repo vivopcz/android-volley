@@ -18,6 +18,7 @@ package com.android.volley;
 
 import org.apache.http.HttpStatus;
 
+import java.io.File;
 import java.io.Serializable;
 import java.util.Collections;
 import java.util.Map;
@@ -43,6 +44,25 @@ public class NetworkResponse implements Serializable{
         this.headers = headers;
         this.notModified = notModified;
         this.networkTimeMs = networkTimeMs;
+        this.file = null;
+    }
+
+    /**
+     * Creates a new network response.
+     * @param statusCode the HTTP status code
+     * @param file Response body
+     * @param headers Headers returned with this response, or null for none
+     * @param notModified True if the server returned a 304 and the data was already in cache
+     * @param networkTimeMs Round-trip network time to receive network response
+     */
+    public NetworkResponse(int statusCode, File file, Map<String, String> headers,
+                           boolean notModified, long networkTimeMs) {
+        this.statusCode = statusCode;
+        this.file = file;
+        this.headers = headers;
+        this.notModified = notModified;
+        this.networkTimeMs = networkTimeMs;
+        this.data = new byte[0];
     }
 
     public NetworkResponse(int statusCode, byte[] data, Map<String, String> headers,
@@ -72,5 +92,7 @@ public class NetworkResponse implements Serializable{
 
     /** Network roundtrip time in milliseconds. */
     public final long networkTimeMs;
+
+    public final File file;
 }
 

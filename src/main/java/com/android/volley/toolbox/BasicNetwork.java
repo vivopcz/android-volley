@@ -16,6 +16,7 @@
 
 package com.android.volley.toolbox;
 
+import android.net.Uri;
 import android.os.SystemClock;
 
 import com.android.volley.AuthFailureError;
@@ -41,6 +42,9 @@ import org.apache.http.StatusLine;
 import org.apache.http.conn.ConnectTimeoutException;
 import org.apache.http.impl.cookie.DateUtils;
 
+import java.io.BufferedOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
@@ -89,6 +93,7 @@ public class BasicNetwork implements Network {
         while (true) {
             HttpResponse httpResponse = null;
             byte[] responseContents = null;
+            File file = null;
             Map<String, String> responseHeaders = Collections.emptyMap();
             try {
                 // Gather headers.
@@ -104,7 +109,7 @@ public class BasicNetwork implements Network {
 
                     Entry entry = request.getCacheEntry();
                     if (entry == null) {
-                        return new NetworkResponse(HttpStatus.SC_NOT_MODIFIED, null,
+                        return new NetworkResponse(HttpStatus.SC_NOT_MODIFIED, new byte[0],
                                 responseHeaders, true,
                                 SystemClock.elapsedRealtime() - requestStart);
                     }
@@ -125,9 +130,25 @@ public class BasicNetwork implements Network {
                 	request.setRedirectUrl(newUrl);
                 }
 
+                if (request instanceof  FileRequest){
+                    VolleyLog.v("FileRequest ");
+                    if (responseHeaders.containsKey("X-ES-FILE-PATH")){
+                        String filename = Uri.decode(responseHeaders.get("X-ES-FILE-PATH"));
+                        ((FileRequest)request).setFile(new File(filename));
+                    }
+
+                    file = ((FileRequest)request).getFile();
+                }
+
+
                 // Some responses such as 204s do not have content.  We must check.
                 if (httpResponse.getEntity() != null) {
-                  responseContents = entityToBytes(httpResponse.getEntity());
+                    if (request instanceof  FileRequest){
+                        responseContents = new byte[0];
+                        entityToFile(httpResponse.getEntity(), (FileRequest)request);
+                    } else {
+                        responseContents = entityToBytes(httpResponse.getEntity());
+                    }
                 } else {
                   // Add 0 byte response as a way of honestly representing a
                   // no-content request.
@@ -141,8 +162,13 @@ public class BasicNetwork implements Network {
                 if (statusCode < 200 || statusCode > 299) {
                     throw new IOException();
                 }
-                return new NetworkResponse(statusCode, responseContents, responseHeaders, false,
-                        SystemClock.elapsedRealtime() - requestStart);
+                if (request instanceof  FileRequest){
+                    return new NetworkResponse(statusCode, file, responseHeaders, false,
+                            SystemClock.elapsedRealtime() - requestStart);
+                } else {
+                    return new NetworkResponse(statusCode, responseContents, responseHeaders, false,
+                            SystemClock.elapsedRealtime() - requestStart);
+                }
             } catch (SocketTimeoutException e) {
                 attemptRetryOnException("socket", request, new TimeoutError());
             } catch (ConnectTimeoutException e) {
@@ -269,6 +295,48 @@ public class BasicNetwork implements Network {
         }
     }
 
+
+    /** Reads the contents of HttpEntity into a byte[]. */
+    private void entityToFile(HttpEntity entity, FileRequest request) throws IOException, ServerError {
+        byte[] buffer = null;
+        File file = request.getFile();
+        if (file == null){
+            throw new IOException("entityToFile file null");
+        }
+
+        makeDir(file.getParentFile());
+        BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(request.getFile()), 8192);
+        try {
+            InputStream in = entity.getContent();
+            if (in == null) {
+                throw new ServerError();
+            }
+            buffer = mPool.getBuf(1024);
+            int count;
+            while ((count = in.read(buffer)) != -1 && !request.isCanceled()) {
+                out.write(buffer, 0, count);
+            }
+        } finally {
+            try {
+                // Close the InputStream and release the resources by "consuming the content".
+                entity.consumeContent();
+            } catch (IOException e) {
+                // This can happen if there was an exception above that left the entity in
+                // an invalid state.
+                VolleyLog.v("Error occured when calling consumingContent");
+            }
+            mPool.returnBuf(buffer);
+            out.close();
+        }
+    }
+
+    public static void makeDir(File dir) {
+        if(! dir.getParentFile().exists()) {
+            makeDir(dir.getParentFile());
+        }
+        dir.mkdir();
+    }
+
     /**
      * Converts Headers[] to Map<String, String>.
      */
@@ -276,6 +344,7 @@ public class BasicNetwork implements Network {
         Map<String, String> result = new TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER);
         for (int i = 0; i < headers.length; i++) {
             result.put(headers[i].getName(), headers[i].getValue());
+            VolleyLog.v("HEADER NAME  " + headers[i].getName() + ", value " + Uri.decode(headers[i].getValue()));
         }
         return result;
     }
